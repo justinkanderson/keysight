@@ -26,7 +26,7 @@ Leer piano spelen op je eigen piano met de Steam Frame. KeySight draait native o
 - **Automatische kalibratie**: druk met het gele bolletje van een controller een paar echte
   toetsen in. Via MIDI weet de app precies welke toets het was. Een kleinste-kwadratenlijn
   bepaalt plek, richting en breedte van jouw klavier. Uitschieters, twee toetsen tegelijk en
-  een breedte die meer dan 5% afwijkt worden geweigerd. Daarna kun je met **Bijstellen** het
+  een breedte die meer dan 5% afwijkt worden geweigerd. Daarna kun je met **Adjust** het
   klavier met de sticks nog verschuiven, omhoog/omlaag zetten en draaien. Wordt bewaard.
 
 ## Bediening

@@ -21,9 +21,9 @@ your real keys.
 - **Sheet music view** (optional): a grand staff on the panel above the keys, where a paper
   score would stand. Note values with stems and flags, clefs, key signature (from the file or
   estimated), time signature and bar lines, a cursor and a page turn per system. Played notes
-  turn green, missed ones red. Choose falling notes, score, or both with *Beeld*
-  (Vallend / Partituur / Beide); with both, the falling notes get shorter so they don't touch
-  the score. The panel's height and tilt can be adjusted under *Bijstellen*. Notation from MIDI
+  turn green, missed ones red. Choose falling notes, score, or both with *View*
+  (Falling notes / Score / Both); with both, the falling notes get shorter so they don't touch
+  the score. The panel's height and tilt can be adjusted under *Adjust*. Notation from MIDI
   is an approximation: quantised to 16ths, no ties or beams, simplified rests.
 - **Wait mode**: the song pauses at every chord until you've played all of its notes. The clock
   starts on your first correct key.
@@ -41,6 +41,12 @@ your real keys.
 - **Refresh rate** 72 / 90 / 120 Hz (button *Hz*), holding a steady 90 fps with all effects.
 - **Tested**: a self-test (MIDI parsing, calibration maths, scoring, notation, a regression test
   for MIDI dropping out) plus a [hardware checklist](docs/HARDWARE_TEST.md) for the headset.
+- **Loop a passage**: press *Loop* in the lesson bar to mark the start bar, again to mark
+  the end bar, and the passage repeats with a one-bar lead-in. Each pass is scored, so you
+  can watch it improve; press *Loop off* to carry on.
+- **Metronome and count-in** (*Click* next to Tempo): *Off*, *Count-in* (one bar before
+  the first note and before each loop pass) or *On*. The click follows the tempo setting, accents
+  beat 1, and a beat indicator in the lesson bar shows where you are in the bar.
 - **Hands-free controls**: the middle (sostenuto) pedal starts and pauses. In the menu, the
   lowest A and B keys choose the previous or next song.
 
@@ -96,13 +102,13 @@ godot --headless --path . --export-release "Steam Frame Arm64"
 | Where | Action |
 |---|---|
 | Controller | Point at the panel and pull the trigger. The stick scrolls the song list. A/X start or pause, B/Y restart. |
-| Menu options | *Modus* (wait / play along), *Handen* (both / left / right), *Tempo*, *Beeld* (falling notes / score / both), *Hz* (72 / 90 / 120), *Toetsen* (how visible the virtual keys are), *Passthrough* |
+| Menu options | *Mode* (wait / play along), *Hands* (both / left / right), *Tempo*, *View* (falling notes / score / both), *Hz* (72 / 90 / 120), *Keys* (how visible the virtual keys are), *Passthrough* |
 | Piano only | Middle pedal starts, pauses or restarts. In the menu, the lowest A selects the previous song and the lowest B the next one. |
-| Desktop (testing) | Mouse on the panel, Space, arrow keys (song/tempo), W, H, R, B (-5 s), K, P, Esc |
+| Desktop (testing) | Mouse on the panel, Space, arrow keys (song/tempo), W, H, R, B (-5 s), K, P, L (loop), M (metronome), Esc |
 
-**Calibration:** press *Kalibreren*, hold a controller and use the yellow dot to press real keys one
+**Calibration:** press *Calibrate*, hold a controller and use the yellow dot to press real keys one
 at a time, near their front edge: first far left, then far right, then a few in the middle.
-Then press *Klaar*. Use *Bijstellen* to nudge the keyboard with the sticks (right stick: sideways
+Then press *Done*. Use *Adjust* to nudge the keyboard with the sticks (right stick: sideways
 and depth, left stick: height and rotation), and to move the panel higher or lower or tilt it.
 
 ## Known limits
@@ -116,7 +122,6 @@ and depth, left stick: height and rotation), and to move the panel higher or low
   recognising the keyboard visually.
 - **No sound and no MIDI output**: your piano makes the sound, and Godot has no MIDI out, so
   there's no accompaniment playback.
-- The interface is currently in **Dutch**.
 
 ## Troubleshooting
 
@@ -125,7 +130,7 @@ and depth, left stick: height and rotation), and to move the panel higher or low
 - **Piano not detected**: check `cat /proc/asound/cards` over SSH. Full-speed USB instruments
   sometimes fail on the direct port; try a USB 2.0 hub (with power delivery so the headset
   keeps charging).
-- **Keyboard overlay in the wrong place**: run *Kalibreren* again. The overlay is stored relative
+- **Keyboard overlay in the wrong place**: run *Calibrate* again. The overlay is stored relative
   to the SteamVR play area, so recentring can move it.
 - Logs: start the binary from a shell, or wrap it in a script that writes stdout to a file.
 
@@ -140,10 +145,9 @@ and depth, left stick: height and rotation), and to move the panel higher or low
 
 ## Roadmap
 
-- English interface (with Dutch kept as an option)
 - Hand tracking once the Frame offers it
-- Loop a passage, metronome, count-in
-- Sheet-music view, finger numbers
+- Finger numbers (MusicXML import)
+- Accompaniment / other hand played back through the piano (raw MIDI out)
 - Simpler installation (a ready-made release)
 
 ## Contributing

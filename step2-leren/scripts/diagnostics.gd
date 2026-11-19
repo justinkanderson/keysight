@@ -15,16 +15,16 @@ static func platform_lines() -> PackedStringArray:
 	out.append("OS: %s / %s %s" % [OS.get_name(), OS.get_distribution_name(), OS.get_version()])
 	out.append("Executable: %s" % OS.get_executable_path())
 	out.append("user://  = %s" % ProjectSettings.globalize_path("user://"))
-	out.append("Geluidsdriver: %s (ALSA-MIDI vereist ALSA of PulseAudio)" % AudioServer.get_driver_name())
+	out.append("Audio driver: %s (ALSA MIDI needs ALSA or PulseAudio)" % AudioServer.get_driver_name())
 	return out
 
 
 static func xr_lines(xr: XRInterface) -> PackedStringArray:
 	var out := PackedStringArray()
 	if xr == null:
-		out.append("OpenXR: interface niet gevonden")
+		out.append("OpenXR: interface not found")
 		return out
-	out.append("OpenXR geinitialiseerd: %s" % xr.is_initialized())
+	out.append("OpenXR initialized: %s" % xr.is_initialized())
 	if not xr.is_initialized():
 		return out
 	var info := xr.get_system_info()
@@ -35,12 +35,12 @@ static func xr_lines(xr: XRInterface) -> PackedStringArray:
 	for m in modes:
 		names.append(blend_mode_name(int(m)))
 	out.append("Blend modes: %s" % ", ".join(names))
-	out.append("ALPHA_BLEND (passthrough) beschikbaar: %s" % (XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND in modes))
+	out.append("ALPHA_BLEND (passthrough) available: %s" % (XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND in modes))
 	out.append("is_passthrough_supported(): %s" % xr.is_passthrough_supported())
 	if xr is OpenXRInterface:
 		var oxr := xr as OpenXRInterface
-		out.append("Refresh rate: %.0f Hz (beschikbaar: %s)" % [oxr.display_refresh_rate, oxr.get_available_display_refresh_rates()])
-		out.append("Hand tracking ondersteund: %s" % oxr.is_hand_tracking_supported())
+		out.append("Refresh rate: %.0f Hz (available: %s)" % [oxr.display_refresh_rate, oxr.get_available_display_refresh_rates()])
+		out.append("Hand tracking supported: %s" % oxr.is_hand_tracking_supported())
 	return out
 
 
@@ -71,19 +71,19 @@ static func alsa_lines() -> PackedStringArray:
 	var cards := _read_text("/proc/asound/cards")
 	out.append("/proc/asound/cards:")
 	if cards == "":
-		out.append("  (niet leesbaar of leeg)")
+		out.append("  (unreadable or empty)")
 	else:
 		for l in cards.split("\n"):
 			out.append("  " + l)
 	var d := DirAccess.open("/dev/snd")
 	if d == null:
-		out.append("/dev/snd: NIET toegankelijk (container?)")
+		out.append("/dev/snd: NOT accessible (container?)")
 	else:
 		var midi_nodes := PackedStringArray()
 		for f in d.get_files():
 			if f.begins_with("midi") or f.begins_with("seq"):
 				midi_nodes.append(f)
-		out.append("/dev/snd midi/seq-nodes: %s" % (", ".join(midi_nodes) if midi_nodes.size() > 0 else "GEEN"))
+		out.append("/dev/snd midi/seq nodes: %s" % (", ".join(midi_nodes) if midi_nodes.size() > 0 else "NONE"))
 	return out
 
 
@@ -95,7 +95,7 @@ static func usb_lines() -> PackedStringArray:
 	var base := "/sys/bus/usb/devices"
 	var d := DirAccess.open(base)
 	if d == null:
-		out.append("USB: /sys/bus/usb/devices niet leesbaar")
+		out.append("USB: /sys/bus/usb/devices not readable")
 		return out
 	var found_yamaha := false
 	for dev in d.get_directories():
@@ -116,5 +116,5 @@ static func usb_lines() -> PackedStringArray:
 		if speed == "12":
 			tags += "  [full-speed]"
 		out.append("  %s %s:%s %s %s (%s Mbit/s)%s" % [dev, vid, pid, maker, product, speed, tags])
-	out.insert(0, "USB-apparaten (Yamaha gevonden: %s):" % found_yamaha)
+	out.insert(0, "USB devices (Yamaha found: %s):" % found_yamaha)
 	return out

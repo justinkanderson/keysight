@@ -35,7 +35,7 @@ func add_sample(note: int, p: Vector3) -> String:
 		if dt < CHORD_REJECT and last["note"] != note:
 			samples.pop_back()
 			rejected += 1
-			return "Twee toetsen tegelijk: beide punten genegeerd. Druk één toets per keer."
+			return "Two keys at once: both points ignored. Press one key at a time."
 		if dt < DEBOUNCE and last["note"] == note:
 			return ""
 	# Zelfde toets opnieuw: vervang het oude punt.
@@ -47,7 +47,7 @@ func add_sample(note: int, p: Vector3) -> String:
 		var pred: Vector3 = predict(note)
 		if pred.distance_to(p) > 0.15:
 			rejected += 1
-			return "Punt %s ligt %.0f cm naast de verwachting en is genegeerd." % [
+			return "Point %s is %.0f cm from where it was expected and was ignored." % [
 				MidiMonitor.note_name(note), pred.distance_to(p) * 100.0]
 	samples.append({"note": note, "p": p, "msec": now})
 	last_fit = fit()
@@ -57,10 +57,10 @@ func add_sample(note: int, p: Vector3) -> String:
 func status_text() -> String:
 	var n := samples.size()
 	if n == 0:
-		return "Druk met het gele bolletje op een witte toets helemaal links, vlak bij de voorrand."
+		return "Use the yellow ball to press a white key at the far left, close to the front edge."
 	if not last_fit.get("ok", false):
-		return "%d punt(en). %s" % [n, last_fit.get("why", "Druk nog een toets, ver van de vorige.")]
-	return "%d punten, passing %.1f mm, breedte %.1f cm (schaal %.3f). Nog een paar toetsen verspreid is nauwkeuriger; trekker = klaar." % [
+		return "%d point(s). %s" % [n, last_fit.get("why", "Press another key, far from the last one.")]
+	return "%d points, fit %.1f mm, width %.1f cm (scale %.3f). A few more keys spread out make it more accurate; trigger = done." % [
 		n, last_fit["rms"] * 1000.0, last_fit["width"] * 100.0, last_fit["scale"]]
 
 
@@ -111,13 +111,13 @@ func fit() -> Dictionary:
 		var why := ""
 		if r["span"] < MIN_SPAN:
 			ok = false
-			why = "Punten liggen te dicht bij elkaar (%.0f cm). Druk ook een toets ver aan de andere kant." % (r["span"] * 100.0)
+			why = "Points are too close together (%.0f cm). Also press a key far away on the other side." % (r["span"] * 100.0)
 		elif absf(r["scale"] - 1.0) > MAX_SCALE_DEV:
 			ok = false
-			why = "Breedte klopt niet (schaal %.2f). Druk precies met het gele bolletje, één toets per keer." % r["scale"]
+			why = "Width is off (scale %.2f). Press precisely with the yellow ball, one key at a time." % r["scale"]
 		elif r["max_res"] > MAX_RESIDUAL:
 			ok = false
-			why = "Punten passen slecht op één lijn (%.0f mm). Druk nog wat toetsen." % (r["max_res"] * 1000.0)
+			why = "Points don't line up well (%.0f mm). Press a few more keys." % (r["max_res"] * 1000.0)
 		r["ok"] = ok
 		r["why"] = why
 		return r
@@ -129,7 +129,7 @@ func _fit_once(use: Array) -> Dictionary:
 	for s in use:
 		notes_seen[s["note"]] = true
 	if notes_seen.size() < 2:
-		return {"ok": false, "ok_shape": false, "why": "Druk nog een toets, ver van de vorige."}
+		return {"ok": false, "ok_shape": false, "why": "Press another key, far from the last one."}
 	var xs: Array[float] = []
 	var ps: Array[Vector3] = []
 	for s in use:
@@ -137,12 +137,12 @@ func _fit_once(use: Array) -> Dictionary:
 		ps.append(s["p"])
 	var l := _line_fit(xs, ps)
 	if l.is_empty():
-		return {"ok": false, "ok_shape": false, "why": "Druk nog een toets, ver van de vorige."}
+		return {"ok": false, "ok_shape": false, "why": "Press another key, far from the last one."}
 	var d: Vector3 = l[1]
 	var dh := Vector3(d.x, 0, d.z)
 	var scale := dh.length()
 	if scale < 1e-4:
-		return {"ok": false, "ok_shape": false, "why": "Kan geen richting bepalen."}
+		return {"ok": false, "ok_shape": false, "why": "Can't determine the direction."}
 	var xdir := dh / scale
 	var zdir := xdir.cross(Vector3.UP).normalized()   # naar de speler toe
 	# Elk punt verschuiven naar de voorrand en naar de onderkant van het klavier.

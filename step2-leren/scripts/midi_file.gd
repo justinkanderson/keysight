@@ -37,7 +37,7 @@ static func load_file(file_path: String) -> MidiSong:
 	s.title = rx.sub(s.title, "")
 	var bytes := FileAccess.get_file_as_bytes(file_path)
 	if bytes.is_empty():
-		s.error = "kan bestand niet lezen"
+		s.error = "can't read the file"
 		return s
 	s.parse(bytes)
 	return s
@@ -45,14 +45,14 @@ static func load_file(file_path: String) -> MidiSong:
 
 func parse(b: PackedByteArray) -> void:
 	if b.size() < 14 or b.slice(0, 4).get_string_from_ascii() != "MThd":
-		error = "geen MIDI-bestand (MThd ontbreekt)"
+		error = "not a MIDI file (MThd missing)"
 		return
 	var hlen := _u32(b, 4)
 	var fmt := _u16(b, 8)
 	var ntrk := _u16(b, 10)
 	var div := _u16(b, 12)
 	if fmt > 1:
-		error = "MIDI-format %d wordt niet ondersteund" % fmt
+		error = "MIDI format %d is not supported" % fmt
 		return
 	if div & 0x8000:
 		var fps_code := 256 - ((div >> 8) & 0xFF)
@@ -198,7 +198,7 @@ func _build_notes(events: Array) -> void:
 	for n in notes:
 		duration = maxf(duration, n["end"])
 	if notes.is_empty():
-		error = "geen noten gevonden"
+		error = "no notes found"
 
 
 ## Linker- of rechterhand bepalen. Twee of meer sporen met noten: het spoor
@@ -222,11 +222,11 @@ func _assign_hands(track_notes: Dictionary) -> void:
 				n["hand"] = 1
 			else:
 				n["hand"] = 1 if avg[n["track"]] >= 64.0 else 0
-		hand_rule = "per spoor (%d sporen)" % track_notes.size()
+		hand_rule = "per track (%d tracks)" % track_notes.size()
 	else:
 		for n in notes:
 			n["hand"] = 0 if n["pitch"] < 60 else 1
-		hand_rule = "split op centrale C"
+		hand_rule = "split at middle C"
 
 
 func ticks_per_quarter() -> int:

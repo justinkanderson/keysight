@@ -50,7 +50,7 @@ static func midi_backend_ok() -> bool:
 
 func rescan() -> void:
 	if not midi_backend_ok():
-		raw_event.emit("[fout] geluidsdriver '%s': MIDI uitgeschakeld. Start met --audio-driver ALSA" % AudioServer.get_driver_name())
+		raw_event.emit("[error] audio driver '%s': MIDI disabled. Start with --audio-driver ALSA" % AudioServer.get_driver_name())
 		set_process(false)
 		return
 	# Alleen sluiten als we eerder geopend hebben: close zonder open kan
@@ -63,7 +63,7 @@ func rescan() -> void:
 	if now != devices:
 		devices = now
 		devices_changed.emit(devices)
-	raw_event.emit("[scan] %d MIDI-ingang(en): %s" % [devices.size(), ", ".join(devices)])
+	raw_event.emit("[scan] %d MIDI input(s): %s" % [devices.size(), ", ".join(devices)])
 
 
 func _process(delta: float) -> void:
@@ -113,13 +113,13 @@ func _input(event: InputEvent) -> void:
 				67:
 					soft = e.controller_value
 			control_change.emit(e.controller_number, e.controller_value, e.channel)
-			raw_event.emit("CC%-3d = %3d   kan %d" % [e.controller_number, e.controller_value, e.channel + 1])
+			raw_event.emit("CC%-3d = %3d   ch %d" % [e.controller_number, e.controller_value, e.channel + 1])
 		_:
 			var n := _message_name(e.message)
 			other_messages[n] = int(other_messages.get(n, 0)) + 1
 			# Klok/active sensing niet in het log spammen.
 			if e.message != MIDI_MESSAGE_TIMING_CLOCK and e.message != MIDI_MESSAGE_ACTIVE_SENSING:
-				raw_event.emit("%s  kan %d" % [n, e.channel + 1])
+				raw_event.emit("%s  ch %d" % [n, e.channel + 1])
 
 
 func _handle_on(note: int, velocity: int, channel: int) -> void:
@@ -129,7 +129,7 @@ func _handle_on(note: int, velocity: int, channel: int) -> void:
 	velocity_min = mini(velocity_min, velocity)
 	velocity_max = maxi(velocity_max, velocity)
 	note_on.emit(note, velocity, channel)
-	raw_event.emit("AAN  %-4s (%3d)  vel %3d  kan %d" % [note_name(note), note, velocity, channel + 1])
+	raw_event.emit("ON   %-4s (%3d)  vel %3d  ch %d" % [note_name(note), note, velocity, channel + 1])
 
 
 func _handle_off(note: int, channel: int) -> void:
@@ -138,7 +138,7 @@ func _handle_off(note: int, channel: int) -> void:
 		orphan_note_offs += 1
 	held.erase(note)
 	note_off.emit(note, channel)
-	raw_event.emit("UIT  %-4s (%3d)            kan %d" % [note_name(note), note, channel + 1])
+	raw_event.emit("OFF  %-4s (%3d)            ch %d" % [note_name(note), note, channel + 1])
 
 
 static func note_name(note: int) -> String:

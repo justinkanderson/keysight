@@ -13,7 +13,8 @@ extends Node3D
 ##     laagste A (A0) / laagste B (B0)  = vorig / volgend lied (in het menu)
 ##     In de wachtmodus start de klok bij de eerste juiste toets.
 ##   Pc: muis op het scherm, spatie start/pauze, links/rechts lied, op/neer
-##     tempo, W wacht, H hand, R opnieuw, B -5 s, K kalibreren, P passthrough.
+##     tempo, W wacht, H hand, R opnieuw, B -5 s, K kalibreren, P passthrough,
+##     L loop (start / end / off), M metronome (off / count-in / on).
 
 const SONG_DIRS := ["res://songs"]
 const CALIB_FILE := "user://kalibratie.cfg"
@@ -21,11 +22,12 @@ const SETTINGS_FILE := "user://instellingen.cfg"
 const SCORES_FILE := "user://scores.cfg"
 const DIAG_FILE := "user://keysight_diagnose.txt"
 const KEY_ALPHAS := [0.10, 0.35, 1.0]
-const KEY_ALPHA_NAMES := ["dun", "zwak", "vol"]
+const KEY_ALPHA_NAMES := ["faint", "light", "full"]
 const COLOR_OK := Color(0.24, 0.86, 0.59, 0.95)
 const COLOR_BAD := Color(1.0, 0.25, 0.25, 0.95)
 const SCREEN_W := 0.90
 const SCREEN_H := 0.36
+const CLICK_NAMES := ["Off", "Count-in", "On"]
 
 var xr: XRInterface
 var xr_active := false
@@ -43,6 +45,7 @@ var ui: AppUI
 var midi: MidiMonitor
 var session := PracticeSession.new()
 var calibrator := AutoCalibrator.new()
+var metronome: Metronome
 var world_env: WorldEnvironment
 
 var songs: Array[String] = []
@@ -90,6 +93,9 @@ func _ready() -> void:
 	midi.devices_changed.connect(func(_d: PackedStringArray) -> void: _refresh_diagnostics())
 	add_child(midi)
 	session.finished.connect(_on_finished)
+	metronome = Metronome.new()
+	metronome.name = "Metronome"
+	add_child(metronome)
 	_scan_songs()
 	_load_settings()
 	_layout_screen()
@@ -105,17 +111,26 @@ func _ready() -> void:
 	if xr_active:
 		# De XR-sessie draait pas na een paar frames: dan pas Hz uitlezen/instellen.
 		get_tree().create_timer(2.0).timeout.connect(func() -> void:
-			_log("[hz] beschikbaar: %s, nu %.0f Hz" % [_refresh_rates(), _current_rate()])
+			_log("[hz] available: %s, now %.0f Hz" % [_refresh_rates(), _current_rate()])
 			if _wanted_rate > 0.0:
 				_apply_refresh_rate(_wanted_rate)
 			_refresh_options())
 	_refresh_diagnostics()
 	_save_diagnostics()
 	_set_state("menu")
+	var ci := args.find("--click")
+	if ci >= 0 and ci + 1 < args.size():
+		metronome.mode = clampi(int(args[ci + 1]), 0, 2)
+		_refresh_options()
 	if "--demo" in args:
 		_demo = true
-		_log("[demo] speelt het lied automatisch, met kleine foutjes")
+		_log("[demo] plays the song automatically, with small mistakes")
 		_start_lesson()
+	# --loop <first bar> <last bar> (1-based), for testing
+	var li := args.find("--loop")
+	if li >= 0 and li + 2 < args.size() and ui_state == "lesson":
+		session.set_loop(int(args[li + 1]) - 1, int(args[li + 2]) - 1)
+		metronome.reset(session.t)
 	var st_i := args.find("--state")
 	if st_i >= 0 and st_i + 1 < args.size():
 		_test_state(args[st_i + 1])
@@ -140,7 +155,7 @@ func _setup_xr() -> void:
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 		_set_passthrough(true)
 	else:
-		print("[KeySight] Geen OpenXR, desktopmodus.")
+		print("[KeySight] No OpenXR, desktop mode.")
 
 
 func _set_passthrough(on: bool) -> void:
@@ -279,7 +294,7 @@ func _scan_songs() -> void:
 				var s := MidiSong.load_file(path)
 				songs.append(path)
 				song_meta.append({"title": s.title, "dur": s.duration, "notes": s.notes.size(), "error": s.error})
-	_log("[liedjes] %d gevonden; eigen .mid in %s" % [songs.size(), OS.get_executable_path().get_base_dir().path_join("songs")])
+	_log("[songs] %d found; own .mid files in %s" % [songs.size(), OS.get_executable_path().get_base_dir().path_join("songs")])
 	_refresh_song_list()
 
 
@@ -297,12 +312,12 @@ func _refresh_song_list() -> void:
 
 func _select_song(i: int) -> void:
 	if songs.is_empty():
-		ui.set_selected(-1, "Geen liedjes gevonden", "Zet .mid-bestanden in ~/pianovr/songs")
+		ui.set_selected(-1, "No songs found", "Put .mid files in ~/pianovr/songs")
 		return
 	song_index = posmod(i, songs.size())
 	var s := MidiSong.load_file(songs[song_index])
 	if s.error != "":
-		_log("[lied] %s: %s" % [songs[song_index].get_file(), s.error])
+		_log("[song] %s: %s" % [songs[song_index].get_file(), s.error])
 	session.load_song(s)
 	highway.set_notes(session.notes)
 	score_model = ScoreModel.new()
@@ -313,15 +328,15 @@ func _select_song(i: int) -> void:
 	for n in session.notes:
 		if n["hand"] == 0:
 			left += 1
-	var info := "%s  ·  %d noten  ·  links %d / rechts %d" % [
+	var info := "%s  ·  %d notes  ·  left %d / right %d" % [
 		PracticeSession._mmss(s.duration), session.notes.size(), left, session.notes.size() - left]
 	if s.pedal.size() > 0:
-		info += "  ·  met pedaal"
+		info += "  ·  with pedal"
 	if s.error != "":
-		info = "Kan niet lezen: " + s.error
+		info = "Can't read: " + s.error
 	_song_info = info
 	ui.set_selected(song_index, s.title, info)
-	_log("[lied] %s: %d noten, %s, handen %s, pedaal %d wissels" % [
+	_log("[song] %s: %d notes, %s, hands %s, pedal %d changes" % [
 		s.title, session.notes.size(), PracticeSession._mmss(s.duration), s.hand_rule, s.pedal.size()])
 	_save_settings()
 
@@ -338,7 +353,9 @@ func _set_state(st: String) -> void:
 func _start_lesson() -> void:
 	if session.notes.is_empty():
 		return
+	session.count_in = metronome.mode != Metronome.OFF
 	session.restart()
+	metronome.reset(session.t)
 	keyboard.release_all()
 	_set_state("lesson")
 	# In de wachtmodus start de klok bij de eerste juiste toets.
@@ -477,6 +494,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_B: session.seek(-5.0)
 		KEY_K: _on_ui("calib", null)
 		KEY_P: _on_ui("pass", null)
+		KEY_L: _on_ui("loop", null)
+		KEY_M: _on_ui("click", null)
 		KEY_ESCAPE: _on_ui("menu", null)
 
 
@@ -523,6 +542,15 @@ func _on_ui(id: String, arg: Variant) -> void:
 		"calib_cancel": _cancel_calibration()
 		"tune": _start_tune()
 		"pause": _toggle_play()
+		"loop":
+			if ui_state == "lesson":
+				var r := session.loop_mark()
+				metronome.reset(session.t)
+				_log("[loop] %s, bars %s" % [r, session.loop_bars])
+				_update_hud(true)
+		"click":
+			metronome.cycle()
+			session.count_in = metronome.mode != Metronome.OFF
 		"restart": _start_lesson()
 		"menu": _to_menu()
 		"next":
@@ -535,9 +563,10 @@ func _on_ui(id: String, arg: Variant) -> void:
 func _refresh_options() -> void:
 	ui.set_options({"wait": session.wait_mode, "hand": session.practice_hand, "speed": session.speed,
 		"keys": KEY_ALPHA_NAMES[key_alpha_i], "passthrough": passthrough_on, "view": view_mode,
+		"click_text": "Click: " + CLICK_NAMES[metronome.mode],
 		"hz_text": _hz_text(),
 		"hz_disabled": not xr_active,
-		"hz_note": "Kies 72, 90 of 120 Hz. Als de headset het niet meteen aanbiedt, geldt het na een herstart van KeySight."})
+		"hz_note": "Choose 72, 90 or 120 Hz. If the headset doesn't offer it right away, it applies after restarting KeySight."})
 
 
 # ---------------------------------------------------------------- verversingsfrequentie
@@ -586,7 +615,7 @@ func _apply_refresh_rate(rate: float) -> void:
 		return
 	xr.display_refresh_rate = rate
 	Engine.physics_ticks_per_second = roundi(rate)
-	_log("[hz] gevraagd %.0f Hz, nu %.0f Hz (beschikbaar: %s)" % [rate, _current_rate(), _refresh_rates()])
+	_log("[hz] requested %.0f Hz, now %.0f Hz (available: %s)" % [rate, _current_rate(), _refresh_rates()])
 
 
 const HZ_CHOICES := [72.0, 90.0, 120.0]
@@ -596,7 +625,7 @@ const HZ_FILE := "keysight_hz.txt"   # naast de app; het startscript zet dit in 
 func _hz_text() -> String:
 	var now := _current_rate()
 	if _wanted_rate > 0.0 and absf(_wanted_rate - now) > 0.5:
-		return "%d Hz (na herstart)" % roundi(_wanted_rate)
+		return "%d Hz (after restart)" % roundi(_wanted_rate)
 	return "%d Hz" % roundi(now) if now > 0.0 else "Hz"
 
 
@@ -618,12 +647,12 @@ func _next_refresh_rate() -> void:
 	if f:
 		f.store_string(str(roundi(_wanted_rate)))
 		f.close()
-	_log("[hz] gekozen %d Hz (nu %.0f, OpenXR biedt %s)" % [roundi(_wanted_rate), _current_rate(), rates])
+	_log("[hz] chose %d Hz (now %.0f, OpenXR offers %s)" % [roundi(_wanted_rate), _current_rate(), rates])
 
 
 # ---------------------------------------------------------------- kalibratie
 
-const CALIB_STEPS := "Houd een controller vast en druk met het gele bolletje echte toetsen in, één per keer, vlak bij de voorrand.\nBegin helemaal links, dan helemaal rechts, dan een paar in het midden. Druk daarna op Klaar."
+const CALIB_STEPS := "Hold a controller and use the yellow ball to press real keys, one at a time, close to the front edge.\nStart at the far left, then the far right, then a few in the middle. Then press Done."
 
 
 func _start_calibration() -> void:
@@ -634,23 +663,23 @@ func _start_calibration() -> void:
 	calibrator.reset()
 	keyboard.base_alpha = 1.0
 	_set_state("calib")
-	ui.set_calib("Kalibreren", CALIB_STEPS, calibrator.status_text(), 0, false)
-	_log("[kalibratie] gestart")
+	ui.set_calib("Calibrate", CALIB_STEPS, calibrator.status_text(), 0, false)
+	_log("[calibration] started")
 
 
 func _calibration_sample(note: int) -> void:
 	var p := _pressing_point(note)
 	if p == Vector3.ZERO:
-		_log("[kalibratie] %s genegeerd: geen controller gevolgd" % MidiMonitor.note_name(note))
-		ui.set_calib("Kalibreren", CALIB_STEPS, "Geen controller gezien. Houd een controller vast (lampje aan) en druk opnieuw.",
+		_log("[calibration] %s ignored: no controller tracked" % MidiMonitor.note_name(note))
+		ui.set_calib("Calibrate", CALIB_STEPS, "No controller seen. Hold a controller (light on) and press again.",
 			calibrator.samples.size(), calibrator.last_fit.get("ok", false))
 		return
 	var msg := calibrator.add_sample(note, p)
 	if msg == "":
 		return
-	_log("[kalibratie] %s @ %s: %s" % [MidiMonitor.note_name(note), p, msg])
+	_log("[calibration] %s @ %s: %s" % [MidiMonitor.note_name(note), p, msg])
 	var f := calibrator.last_fit
-	ui.set_calib("Kalibreren", CALIB_STEPS, msg, calibrator.samples.size(), f.get("ok", false))
+	ui.set_calib("Calibrate", CALIB_STEPS, msg, calibrator.samples.size(), f.get("ok", false))
 	if f.get("ok", false):
 		# Live voorbeeld: klavier springt meteen naar de nieuwe plek.
 		keyboard.place_by_corners(f["left"], f["right"], Vector3.UP, true)
@@ -703,14 +732,14 @@ func _finish_calibration() -> void:
 		_has_calib = true
 		_placed = true
 		_save_calibration()
-		_calib_msg = "Gekalibreerd met %d punten: breedte %.1f cm (standaard %.1f), passing %.1f mm." % [
+		_calib_msg = "Calibrated with %d points: width %.1f cm (standard %.1f), fit %.1f mm." % [
 			f["n"], f["width"] * 100.0, PianoKeyboard.nominal_width() * 100.0, f["rms"] * 1000.0]
-		_log("[kalibratie] " + _calib_msg)
+		_log("[calibration] " + _calib_msg)
 		_set_state("menu")
 	else:
 		calibrating = true
 		keyboard.base_alpha = 1.0
-		ui.set_calib("Kalibreren", CALIB_STEPS, "Nog niet goed genoeg: " + str(f.get("why", "druk nog een paar toetsen.")),
+		ui.set_calib("Calibrate", CALIB_STEPS, "Not good enough yet: " + str(f.get("why", "press a few more keys.")),
 			calibrator.samples.size(), false)
 
 
@@ -735,9 +764,9 @@ func _start_tune() -> void:
 
 
 func _update_tune_text() -> void:
-	ui.set_calib("Bijstellen",
-		"Rechter stick: naar links/rechts en naar voren/achteren.\nLinker stick: omhoog/omlaag en draaien.\nLeg het klavier precies over de echte toetsen en druk op Klaar.",
-		"Verschuiving %+.1f cm opzij, %+.1f cm diepte, %+.1f cm hoogte, %+.1f graden" % [
+	ui.set_calib("Adjust",
+		"Right stick: left/right and forward/back.\nLeft stick: up/down and rotate.\nLine the keyboard up exactly over the real keys and press Done.",
+		"Offset %+.1f cm sideways, %+.1f cm depth, %+.1f cm height, %+.1f degrees" % [
 			_offset.x * 100, _offset.z * 100, _offset.y * 100, _offset.w], -1, true, true)
 
 
@@ -786,7 +815,7 @@ func _save_calibration() -> void:
 func _load_calibration() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(CALIB_FILE) != OK:
-		_calib_msg = "Nog niet gekalibreerd"
+		_calib_msg = "Not calibrated yet"
 		return
 	_calib_base = cfg.get_value("klavier", "basis", Transform3D.IDENTITY)
 	_offset = cfg.get_value("klavier", "bijstelling", Vector4.ZERO)
@@ -794,7 +823,7 @@ func _load_calibration() -> void:
 	if xr_active:
 		_apply_calibration()
 		_placed = true
-	_calib_msg = "Kalibratie hersteld"
+	_calib_msg = "Calibration restored"
 
 
 # ---------------------------------------------------------------- per frame
@@ -808,7 +837,7 @@ func _process(delta: float) -> void:
 	_ft_sum += delta
 	_ft_n += 1
 	if _ft_sum >= 10.0:
-		_log("[perf] gemiddeld %.1f ms per frame (%d fps)" % [_ft_sum / _ft_n * 1000.0, roundi(_ft_n / _ft_sum)])
+		_log("[perf] average %.1f ms per frame (%d fps)" % [_ft_sum / _ft_n * 1000.0, roundi(_ft_n / _ft_sum)])
 		_ft_sum = 0.0
 		_ft_n = 0
 	if xr_active and not _placed and Time.get_ticks_msec() - _start_msec > 1500:
@@ -821,6 +850,7 @@ func _process(delta: float) -> void:
 		_demo_step()
 	if ui_state == "lesson":
 		session.update(delta)
+		metronome.step(session)
 		if view_mode != 0 and session.song:
 			ui.score.set_cursor(score_model.pos16(session.song.seconds_to_ticks(session.t)))
 		var hints := highway.update_view(session.t, session.cursor())
@@ -896,23 +926,44 @@ func _update_hud(force := false) -> void:
 			for k in s.groups[s._gi]["idx"]:
 				if s.notes[k]["state"] == NoteHighway.PENDING:
 					names.append(MidiMonitor.note_name(s.notes[k]["pitch"]))
-		fb = "Wacht op jou: " + " ".join(names)
+		fb = "Waiting for you: " + " ".join(names)
+		col = AppUI.AMBER
+	elif s.playing and s.t < s.count_in_end and metronome.mode != Metronome.OFF:
+		fb = "Count-in..."
 		col = AppUI.AMBER
 	elif not s.playing and not s.done:
-		fb = "Speel de eerste noot om te beginnen" if s.wait_mode and counted == 0 else "Gepauzeerd: middelste pedaal of Verder"
-	elif fb.begins_with("Perfect") or fb.begins_with("Raak"):
+		fb = "Play the first note to start" if s.wait_mode and counted == 0 else "Paused: middle pedal or Resume"
+	elif fb.begins_with("Perfect") or fb.begins_with("Hit"):
 		col = AppUI.ACCENT
-	elif fb.begins_with("Fout"):
+	elif fb.begins_with("Wrong"):
 		col = AppUI.BAD
-	elif fb.begins_with("Gemist"):
+	elif fb.begins_with("Missed"):
 		col = AppUI.AMBER
+	var sub := "Bar %d  ·  %s / %s  ·  tempo %d%%" % [
+		maxi(s.bar_index_at(s.t), 0) + 1,
+		PracticeSession._mmss(maxf(0.0, s.t - first)),
+		PracticeSession._mmss(dur - first), roundi(s.speed * 100)]
+	var loop_text := "Loop"
+	if s.has_loop():
+		loop_text = "Loop off"
+		sub = "Loop %d-%d  ·  pass %d" % [s.loop_bars.x + 1, s.loop_bars.y + 1, s.loop_passes.size() + 1]
+		if not s.loop_passes.is_empty():
+			sub += "  ·  last %d%%" % roundi(s.loop_passes[-1]["acc"])
+	elif s.loop_pending_start >= 0:
+		loop_text = "Set end"
+		sub = "Loop from bar %d: press Set end" % (s.loop_pending_start + 1)
+	var beat := -1
+	if metronome.mode != Metronome.OFF:
+		var bi := s.beat_index_at(s.t)
+		if bi >= 0:
+			beat = s.beats[bi][1]
 	ui.update_hud({
 		"title": s.song.title if s.song else "-",
-		"sub": "%s / %s  ·  tempo %d%%  ·  %s  ·  %s" % [
-			PracticeSession._mmss(maxf(0.0, s.t - first)),
-			PracticeSession._mmss(dur - first), roundi(s.speed * 100),
-			"wachten" if s.wait_mode else "meespelen",
-			{-1: "beide handen", 0: "linkerhand", 1: "rechterhand"}[s.practice_hand]],
+		"sub": sub,
+		"loop_text": loop_text,
+		"loop_active": s.has_loop() or s.loop_pending_start >= 0,
+		"beats": s.beats_per_bar if metronome.mode != Metronome.OFF else 0,
+		"beat": beat,
 		"progress": clampf((s.t - first) / maxf(0.1, dur - first), 0.0, 1.0),
 		"acc": ("%d%%" % roundi(100.0 * s.hits / counted)) if counted > 0 else "-",
 		"feedback": fb,
@@ -924,7 +975,7 @@ func _update_hud(force := false) -> void:
 # ---------------------------------------------------------------- rapport
 
 func _on_finished(rep: String) -> void:
-	print("\n[RAPPORT]\n", rep, "\n")
+	print("\n[REPORT]\n", rep, "\n")
 	_save_report(rep, false)
 	# Beste score bewaren.
 	var acc: float = session.summary.get("acc", 0.0)
@@ -950,7 +1001,7 @@ func _save_report(rep: String, partial: bool) -> void:
 		if f:
 			f.store_string(rep + "\n")
 			f.close()
-			_log("[rapport] opgeslagen: " + ProjectSettings.globalize_path(dir.path_join(fname)))
+			_log("[report] saved: " + ProjectSettings.globalize_path(dir.path_join(fname)))
 
 
 # ---------------------------------------------------------------- instellingen
@@ -962,6 +1013,7 @@ func _save_settings() -> void:
 	cfg.set_value("oefenen", "wachten", session.wait_mode)
 	cfg.set_value("oefenen", "hand", session.practice_hand)
 	cfg.set_value("oefenen", "toetsen", key_alpha_i)
+	cfg.set_value("oefenen", "metronoom", metronome.mode if metronome else 0)
 	cfg.set_value("beeld", "hz", _wanted_rate)
 	cfg.set_value("beeld", "weergave", view_mode)
 	cfg.set_value("beeld", "scherm_dy", screen_dy)
@@ -981,6 +1033,8 @@ func _load_settings() -> void:
 	session.set_wait_mode(cfg.get_value("oefenen", "wachten", true))
 	session.practice_hand = cfg.get_value("oefenen", "hand", -1)
 	key_alpha_i = clampi(cfg.get_value("oefenen", "toetsen", 0), 0, KEY_ALPHAS.size() - 1)
+	metronome.mode = clampi(cfg.get_value("oefenen", "metronoom", 0), 0, 2)
+	session.count_in = metronome.mode != Metronome.OFF
 	_wanted_rate = cfg.get_value("beeld", "hz", 0.0)
 	view_mode = clampi(cfg.get_value("beeld", "weergave", 2), 0, 2)
 	screen_dy = cfg.get_value("beeld", "scherm_dy", 0.0)
@@ -992,7 +1046,7 @@ func _load_settings() -> void:
 
 func _on_raw_midi(text: String) -> void:
 	# Noten en pedalen niet in het log (dat wordt anders te groot), wel scans en fouten.
-	if not text.begins_with("AAN") and not text.begins_with("UIT") and not text.begins_with("CC"):
+	if not text.begins_with("ON") and not text.begins_with("OFF") and not text.begins_with("CC"):
 		_log(text)
 
 
@@ -1006,11 +1060,11 @@ func _refresh_diagnostics() -> void:
 	lines.append_array(Diagnostics.platform_lines())
 	lines.append("")
 	lines.append_array(Diagnostics.xr_lines(xr))
-	lines.append("Passthrough actief: %s" % passthrough_on)
+	lines.append("Passthrough active: %s" % passthrough_on)
 	lines.append("")
-	lines.append("MIDI-ingangen (Godot): %s" % (", ".join(midi.devices) if midi and not midi.devices.is_empty() else "geen"))
-	lines.append("Liedjes: %d   Kalibratie: %s" % [songs.size(), _calib_msg])
-	lines.append("Verversing: %.0f Hz, beschikbaar voor apps: %s" % [_current_rate(), _refresh_rates()])
+	lines.append("MIDI inputs (Godot): %s" % (", ".join(midi.devices) if midi and not midi.devices.is_empty() else "none"))
+	lines.append("Songs: %d   Calibration: %s" % [songs.size(), _calib_msg])
+	lines.append("Refresh: %.0f Hz, available to apps: %s" % [_current_rate(), _refresh_rates()])
 	_diag_text = "\n".join(lines)
 	ui.set_diag(_diag_text)
 
@@ -1043,7 +1097,7 @@ func _test_state(st: String) -> void:
 					break
 		"calib":
 			_start_calibration()
-			ui.set_calib("Kalibreren", CALIB_STEPS, "3 punten, passing 2,1 mm, breedte 121,7 cm. Nog een paar toetsen verspreid is nauwkeuriger.", 3, true)
+			ui.set_calib("Calibrate", CALIB_STEPS, "3 points, fit 2.1 mm, width 121.7 cm. A few more keys spread out make it more accurate.", 3, true)
 		"diag":
 			_on_ui("diag", null)
 

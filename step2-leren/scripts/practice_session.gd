@@ -46,10 +46,27 @@ var _used_wait := false
 var _started_real_msec := 0
 var summary := {}              # laatste analyse, voor de resultatenkaart
 
+# Maten en tellen (voor lus en metronoom)
+const BAR_PAD := 4             # extra maten vóór tick 0, voor het aftellen
+var bar_times: Array[float] = []   # bar_times[i] = begin van maat (i + _bar0), in liedtijd
+var beats: Array = []          # [[tijd, tel_in_maat]]
+var beats_per_bar := 4
+var _bar0 := 0
+var count_in := false          # aftellen op maatgrenzen (gezet als de metronoom aan staat)
+var count_in_end := 0.0        # tot deze liedtijd wordt afgeteld
+
+# Lus: een stuk van een paar maten steeds herhalen
+var loop_bars := Vector2i(-1, -1)   # eerste en laatste maat (inclusief); -1 = geen lus
+var loop_pending_start := -1        # beginmaat gekozen, eindmaat nog niet
+var loop_passes: Array = []         # [{hits, total, wrong, acc}] per doorgang
+
 
 func load_song(s: MidiSong) -> void:
 	song = s
 	notes.clear()
+	loop_bars = Vector2i(-1, -1)
+	loop_pending_start = -1
+	loop_passes.clear()
 	max_note_len = 0.0
 	for n in s.notes:
 		var p: int = n["pitch"]
@@ -59,6 +76,7 @@ func load_song(s: MidiSong) -> void:
 		notes.append(c)
 		max_note_len = maxf(max_note_len, c["end"] - c["start"])
 	_build_groups()
+	_build_beats()
 	restart()
 
 
@@ -78,7 +96,15 @@ func _build_groups() -> void:
 
 
 func restart() -> void:
-	t = (notes[0]["start"] if not notes.is_empty() else 0.0) - LEAD_IN
+	var first: float = notes[0]["start"] if not notes.is_empty() else 0.0
+	t = first - LEAD_IN
+	count_in_end = first
+	if count_in and not bar_times.is_empty():
+		# Aftellen: begin op een maatgrens, minstens één volle maat en 2 s vóór de eerste noot.
+		var b := bar_index_at(first) - 1
+		while b > _bar0 and first - bar_start(b) < 2.0:
+			b -= 1
+		t = bar_start(b)
 	_session_start_t = t
 	playing = false
 	waiting = false
@@ -98,6 +124,9 @@ func restart() -> void:
 	_started_real_msec = Time.get_ticks_msec()
 	for n in notes:
 		_reset_note(n)
+	if has_loop():
+		loop_passes.clear()
+		_wrap_to_loop(false)
 
 
 func _reset_note(n: Dictionary) -> void:
@@ -106,6 +135,8 @@ func _reset_note(n: Dictionary) -> void:
 	n.erase("pvel")
 	n.erase("held")
 	n.erase("hit_t")
+	n.erase("lead")
+	n.erase("demo")   # demo player: play this note again after a loop or seek
 
 
 func is_practiced(n: Dictionary) -> bool:
@@ -190,9 +221,12 @@ func update(dt: float) -> void:
 				n["state"] = NoteHighway.MISSED
 				missed += 1
 				streak = 0
-				last_feedback = "Gemist: " + MidiMonitor.note_name(n["pitch"])
+				last_feedback = "Missed: " + MidiMonitor.note_name(n["pitch"])
 			i += 1
 	t = new_t
+	if has_loop() and t >= loop_end_t():
+		_wrap_to_loop(true)
+		return
 	if t > song.duration + 1.0:
 		_finish()
 
@@ -250,9 +284,9 @@ func note_on(pitch: int, vel: int) -> Dictionary:
 		streak = 0
 		var meant := _nearest_pending_pitch()
 		wrong_events.append([t, pitch, meant])
-		last_feedback = "Fout: %s" % MidiMonitor.note_name(pitch)
+		last_feedback = "Wrong: %s" % MidiMonitor.note_name(pitch)
 		if meant >= 0:
-			last_feedback += " (bedoeld %s)" % MidiMonitor.note_name(meant)
+			last_feedback += " (expected %s)" % MidiMonitor.note_name(meant)
 		return {"kind": "wrong"}
 	var n: Dictionary = notes[best]
 	n["state"] = NoteHighway.HIT
@@ -270,11 +304,11 @@ func note_on(pitch: int, vel: int) -> Dictionary:
 		if absf(dt_ms) <= PERFECT_MS:
 			last_feedback = "Perfect"
 		elif dt_ms < 0:
-			last_feedback = "Raak, %d ms te vroeg" % roundi(-dt_ms)
+			last_feedback = "Hit, %d ms early" % roundi(-dt_ms)
 		else:
-			last_feedback = "Raak, %d ms te laat" % roundi(dt_ms)
+			last_feedback = "Hit, %d ms late" % roundi(dt_ms)
 	else:
-		last_feedback = "Raak"
+		last_feedback = "Hit"
 	return res
 
 
@@ -349,6 +383,143 @@ func _finish() -> String:
 	return rep
 
 
+# ---------------------------------------------------------------- maten en lus
+
+## Rekent de maat- en telgrenzen uit (vaste maatsoort uit het bestand).
+## Vóór tick 0 lopen de tellen door in het eerste tempo, voor het aftellen.
+func _build_beats() -> void:
+	bar_times.clear()
+	beats.clear()
+	if song == null:
+		return
+	var num := maxi(song.time_sig.x, 1)
+	var den := maxi(song.time_sig.y, 1)
+	beats_per_bar = num
+	var beat_ticks := float(maxi(song.ticks_per_quarter(), 1)) * 4.0 / den
+	var bar_ticks := beat_ticks * num
+	var beat0 := song.ticks_to_seconds(roundi(beat_ticks))   # duur van de eerste tel
+	var tick_time := func(tick: float) -> float:
+		return tick / beat_ticks * beat0 if tick < 0.0 else song.ticks_to_seconds(roundi(tick))
+	var last_bar := ceili(song.seconds_to_ticks(song.duration) / bar_ticks) + 1
+	_bar0 = -BAR_PAD
+	for b in range(_bar0, last_bar + 1):
+		bar_times.append(tick_time.call(b * bar_ticks))
+		for k in num:
+			beats.append([tick_time.call(b * bar_ticks + k * beat_ticks), k])
+
+
+## Maatnummer (0 = eerste maat van het bestand) waarin liedtijd `time` valt.
+func bar_index_at(time: float) -> int:
+	if bar_times.is_empty():
+		return 0
+	var i := bar_times.bsearch(time + 0.0001, false) - 1
+	return clampi(i, 0, bar_times.size() - 1) + _bar0
+
+
+func bar_start(bar: int) -> float:
+	if bar_times.is_empty():
+		return 0.0
+	return bar_times[clampi(bar - _bar0, 0, bar_times.size() - 1)]
+
+
+## Index in `beats` van de laatste tel op of vóór `time` (-1 = geen).
+func beat_index_at(time: float) -> int:
+	var lo := 0
+	var hi := beats.size()
+	while lo < hi:
+		var mid := (lo + hi) / 2
+		if beats[mid][0] <= time + 0.0001:
+			lo = mid + 1
+		else:
+			hi = mid
+	return lo - 1
+
+
+func has_loop() -> bool:
+	return loop_bars.x >= 0 and loop_bars.y >= loop_bars.x
+
+
+func loop_start_t() -> float:
+	return bar_start(loop_bars.x)
+
+
+func loop_end_t() -> float:
+	return bar_start(loop_bars.y + 1)
+
+
+## Lusknop: 1e keer = begin bij deze maat, 2e keer = einde bij deze maat
+## (lus start meteen), 3e keer = lus uit. Geeft "start", "on" of "off".
+func loop_mark() -> String:
+	if has_loop():
+		clear_loop()
+		return "off"
+	var b := maxi(bar_index_at(t), 0)
+	if loop_pending_start < 0:
+		loop_pending_start = b
+		return "start"
+	set_loop(loop_pending_start, b)
+	return "on"
+
+
+func set_loop(first_bar: int, last_bar: int) -> void:
+	loop_bars = Vector2i(maxi(mini(first_bar, last_bar), 0), maxi(first_bar, last_bar))
+	loop_pending_start = -1
+	loop_passes.clear()
+	_wrap_to_loop(false)
+
+
+func clear_loop() -> void:
+	loop_bars = Vector2i(-1, -1)
+	loop_pending_start = -1
+	# Aanloopnoten die nog moeten komen weer gewoon meetellen.
+	for n in notes:
+		if n.get("lead", false) and n["start"] >= t:
+			_reset_note(n)
+
+
+## Terug naar het begin van de lus, met één maat aanloop (aftellen).
+func _wrap_to_loop(record: bool) -> void:
+	if record:
+		_record_pass()
+	var a := loop_start_t()
+	t = bar_start(loop_bars.x - 1)
+	count_in_end = a
+	done = false
+	for n in notes:
+		if n["start"] >= t - 0.001:
+			_reset_note(n)
+			# Noten in de aanloopmaat: gedimd tonen, niet verplicht.
+			if n["start"] < a - 0.001 and n["state"] == NoteHighway.PENDING:
+				n["state"] = NoteHighway.OTHER_HAND
+				n["lead"] = true
+	wrong_events = wrong_events.filter(func(w): return w[0] < t)
+	_active_hits.clear()
+	_cursor = 0
+	_gi = 0
+	while _gi < groups.size() and groups[_gi]["time"] < t - 0.001:
+		_gi += 1
+	_recount()
+
+
+func _record_pass() -> void:
+	var a := loop_start_t()
+	var e := loop_end_t()
+	var h := 0
+	var tot := 0
+	for n in notes:
+		if n["start"] >= a - 0.001 and n["start"] < e - 0.001 and is_practiced(n):
+			tot += 1
+			if n["state"] == NoteHighway.HIT:
+				h += 1
+	if tot == 0:
+		return
+	var w := 0
+	for ev in wrong_events:
+		if ev[0] >= a - TOL_REAL * speed and ev[0] < e:
+			w += 1
+	loop_passes.append({"hits": h, "total": tot, "wrong": w, "acc": 100.0 * h / tot})
+
+
 # ---------------------------------------------------------------- rapport
 
 static func _mmss(sec: float) -> String:
@@ -359,10 +530,10 @@ static func _mmss(sec: float) -> String:
 func build_report() -> String:
 	var L := PackedStringArray()
 	var title := song.title if song else "?"
-	L.append("RAPPORT  %s" % title)
+	L.append("REPORT  %s" % title)
 	L.append("%s  |  tempo %d%%  |  %s  |  hand: %s" % [
 		Time.get_datetime_string_from_system(false, true), roundi(speed * 100),
-		"wachtmodus" if _used_wait else "meespelen", ["links", "rechts"][practice_hand] if practice_hand >= 0 else "beide"])
+		"wait mode" if _used_wait else "play along", ["left", "right"][practice_hand] if practice_hand >= 0 else "both"])
 	# Alleen noten tot waar je gekomen bent.
 	var reached: Array[Dictionary] = []
 	for n in notes:
@@ -373,16 +544,23 @@ func build_report() -> String:
 		"acc": 0.0, "speed": speed, "wait": _used_wait, "hand": practice_hand,
 		"streak": best_streak, "timing": "", "hardest": "", "tips": [], "hands": {}}
 	if total == 0:
-		L.append("Nog geen noten gespeeld.")
+		L.append("No notes played yet.")
 		return "\n".join(L)
 	var acc := 100.0 * hits / total
 	var prec := 100.0 * hits / maxf(1.0, hits + wrong)
 	summary["acc"] = acc
 	L.append("")
-	L.append("Noten raak: %d van %d (%.0f%%)   gemist: %d   verkeerde toetsen: %d" % [hits, total, acc, missed, wrong])
-	L.append("Nauwkeurigheid (raak / alle aanslagen): %.0f%%   langste reeks: %d" % [prec, best_streak])
+	L.append("Notes hit: %d of %d (%.0f%%)   missed: %d   wrong keys: %d" % [hits, total, acc, missed, wrong])
+	L.append("Accuracy (hits / all key presses): %.0f%%   longest streak: %d" % [prec, best_streak])
 
 	var tips := PackedStringArray()
+
+	if not loop_passes.is_empty():
+		var accs := PackedStringArray()
+		for p in loop_passes:
+			accs.append("%.0f%%" % p["acc"])
+		L.append("Loop bars %d-%d: %d passes, per pass: %s" % [
+			loop_bars.x + 1, loop_bars.y + 1, loop_passes.size(), ", ".join(accs)])
 
 	# Per hand en wit/zwart
 	var by := {"h0": [0, 0], "h1": [0, 0], "w": [0, 0], "b": [0, 0]}
@@ -397,14 +575,14 @@ func build_report() -> String:
 	var pct := func(a: Array) -> float: return 100.0 * a[0] / maxf(1.0, a[1])
 	var parts := PackedStringArray()
 	if by["h0"][1] > 0:
-		parts.append("linkerhand %.0f%%" % pct.call(by["h0"]))
+		parts.append("left hand %.0f%%" % pct.call(by["h0"]))
 	if by["h1"][1] > 0:
-		parts.append("rechterhand %.0f%%" % pct.call(by["h1"]))
+		parts.append("right hand %.0f%%" % pct.call(by["h1"]))
 	if by["w"][1] > 0:
-		parts.append("witte toetsen %.0f%%" % pct.call(by["w"]))
+		parts.append("white keys %.0f%%" % pct.call(by["w"]))
 	if by["b"][1] > 0:
-		parts.append("zwarte toetsen %.0f%%" % pct.call(by["b"]))
-	L.append("Per onderdeel: " + ", ".join(parts))
+		parts.append("black keys %.0f%%" % pct.call(by["b"]))
+	L.append("Breakdown: " + ", ".join(parts))
 	if by["h0"][1] > 0:
 		summary["hands"][0] = pct.call(by["h0"])
 	if by["h1"][1] > 0:
@@ -413,16 +591,16 @@ func build_report() -> String:
 		var dl: float = pct.call(by["h0"])
 		var dr: float = pct.call(by["h1"])
 		if absf(dl - dr) >= 15.0:
-			var weak := "linkerhand" if dl < dr else "rechterhand"
-			tips.append("De %s gaat minder goed (%.0f%% tegen %.0f%%). Oefen die hand apart met de knop Hand, in wachtmodus." % [weak, minf(dl, dr), maxf(dl, dr)])
+			var weak := "left hand" if dl < dr else "right hand"
+			tips.append("Your %s is weaker (%.0f%% vs %.0f%%). Practise it on its own (Hands: Left/Right) in wait mode." % [weak, minf(dl, dr), maxf(dl, dr)])
 	if by["b"][1] >= 6 and pct.call(by["b"]) < pct.call(by["w"]) - 15.0:
-		tips.append("Zwarte toetsen (kruizen en mollen) gaan minder goed dan witte. Kijk vooraf welke voortekens het stuk heeft.")
+		tips.append("Black keys (sharps and flats) go less well than white ones. Check the key signature before you start.")
 
 	# Verwisselingen
 	var conf := {}
 	for w in wrong_events:
 		if w[2] >= 0:
-			var k := "%s in plaats van %s" % [MidiMonitor.note_name(w[1]), MidiMonitor.note_name(w[2])]
+			var k := "%s instead of %s" % [MidiMonitor.note_name(w[1]), MidiMonitor.note_name(w[2])]
 			conf[k] = int(conf.get(k, 0)) + 1
 	var conf_keys := conf.keys()
 	conf_keys.sort_custom(func(a, b): return conf[a] > conf[b])
@@ -430,11 +608,11 @@ func build_report() -> String:
 		var top := PackedStringArray()
 		for k in conf_keys.slice(0, 3):
 			top.append("%s (%dx)" % [k, conf[k]])
-		L.append("Meest verwisseld: " + ", ".join(top))
+		L.append("Most confused: " + ", ".join(top))
 		if conf[conf_keys[0]] >= 3:
-			tips.append("Je speelt vaak %s. Oefen die plek langzaam." % conf_keys[0])
+			tips.append("You often play %s. Practise that spot slowly." % conf_keys[0])
 	if wrong > 0.15 * total:
-		tips.append("Veel verkeerde toetsen (%d). Zet de wachtmodus aan en verlaag het tempo; snelheid komt later." % wrong)
+		tips.append("Lots of wrong keys (%d). Turn on wait mode and lower the tempo; speed comes later." % wrong)
 
 	# Timing (alleen bij meespelen)
 	var dts: Array[float] = []
@@ -453,15 +631,15 @@ func build_report() -> String:
 			if absf(d) <= PERFECT_MS:
 				perfect += 1
 		sd = sqrt(sd / dts.size())
-		L.append("Timing: gemiddeld %+d ms (%s), spreiding %d ms, %.0f%% binnen %d ms" % [
-			roundi(mean), "te laat" if mean > 0 else "te vroeg", roundi(sd), 100.0 * perfect / dts.size(), PERFECT_MS])
-		summary["timing"] = "%+d ms gemiddeld, spreiding %d ms" % [roundi(mean), roundi(sd)]
+		L.append("Timing: average %+d ms (%s), spread %d ms, %.0f%% within %d ms" % [
+			roundi(mean), "late" if mean > 0 else "early", roundi(sd), 100.0 * perfect / dts.size(), PERFECT_MS])
+		summary["timing"] = "%+d ms average, spread %d ms" % [roundi(mean), roundi(sd)]
 		if mean > 60:
-			tips.append("Je speelt gemiddeld %d ms te laat. Kijk iets verder vooruit naar de vallende noten." % roundi(mean))
+			tips.append("On average you play %d ms late. Look a little further ahead at the falling notes." % roundi(mean))
 		elif mean < -60:
-			tips.append("Je speelt gemiddeld %d ms te vroeg. Wacht tot de balk de toets echt raakt." % roundi(-mean))
+			tips.append("On average you play %d ms early. Wait until the bar actually reaches the key." % roundi(-mean))
 		if sd > 90:
-			tips.append("Je timing is onregelmatig (spreiding %d ms). Probeer een lager tempo." % roundi(sd))
+			tips.append("Your timing is uneven (spread %d ms). Try a lower tempo." % roundi(sd))
 
 	# Loslaten van lange noten
 	var helds: Array[float] = []
@@ -473,9 +651,9 @@ func build_report() -> String:
 		for h in helds:
 			m += h
 		m /= helds.size()
-		L.append("Lange noten aangehouden: gemiddeld %.0f%% van de lengte (%d noten)" % [m * 100.0, helds.size()])
+		L.append("Long notes held: on average %.0f%% of their length (%d notes)" % [m * 100.0, helds.size()])
 		if m < 0.7:
-			tips.append("Lange noten laat je te vroeg los (gemiddeld %.0f%% van de lengte). Houd ze aan tot de balk weg is." % (m * 100.0))
+			tips.append("You release long notes too early (on average at %.0f%% of their length). Hold them until the bar is gone." % (m * 100.0))
 
 	# Aanslag (dynamiek)
 	var ev: Array[float] = []
@@ -488,16 +666,16 @@ func build_report() -> String:
 		var me := _mean(ev)
 		var mp := _mean(pv)
 		var se := _sd(ev, me)
-		L.append("Aanslag: gemiddeld %d (in het bestand %d)" % [roundi(mp), roundi(me)])
+		L.append("Velocity: average %d (file: %d)" % [roundi(mp), roundi(me)])
 		if se > 8.0:
 			var r := _corr(ev, pv)
-			L.append("Dynamiek volgen (correlatie hard/zacht met het bestand): %.2f" % r)
+			L.append("Dynamics (loud/soft correlation with the file): %.2f" % r)
 			if r < 0.3:
-				tips.append("Je volgt de dynamiek nog weinig: speel de lichte balken zachter en de felle harder.")
+				tips.append("You barely follow the dynamics yet: play the pale bars softer and the bright ones louder.")
 		if mp - me > 20:
-			tips.append("Je speelt flink harder dan het stuk aangeeft.")
+			tips.append("You play much louder than the piece asks for.")
 		elif me - mp > 20:
-			tips.append("Je speelt flink zachter dan het stuk aangeeft.")
+			tips.append("You play much softer than the piece asks for.")
 
 	# Pedaal
 	if song and not _used_wait:
@@ -512,12 +690,12 @@ func build_report() -> String:
 					if u[1] == p[1] and absf(u[0] - p[0]) <= 0.5 * speed:
 						ok += 1
 						break
-			L.append("Pedaal: %d van %d wissels op tijd (binnen 0,5 s)" % [ok, file_pedal.size()])
+			L.append("Pedal: %d of %d changes on time (within 0.5 s)" % [ok, file_pedal.size()])
 			if ok < 0.6 * file_pedal.size():
-				tips.append("Het pedaal wisselt in dit stuk %d keer; jij deed er %d op tijd. Til het pedaal op als een nieuw akkoord begint." % [file_pedal.size(), ok])
+				tips.append("The pedal changes %d times in this piece; you got %d on time. Lift the pedal when a new chord starts." % [file_pedal.size(), ok])
 		elif pedal_user.size() >= 6:
-			L.append("Pedaal: %d keer gebruikt; het bestand geeft geen pedaal aan" % (int(pedal_user.size() / 2.0)))
-			tips.append("Dit bestand geeft geen pedaal aan, maar je gebruikte het vaak. Probeer het eens zonder voor een helderder geluid.")
+			L.append("Pedal: used %d times; the file has no pedal marks" % (int(pedal_user.size() / 2.0)))
+			tips.append("This file has no pedal marks, but you used the pedal a lot. Try without it for a clearer sound.")
 
 	# Moeilijkste stukjes
 	var sec := {}
@@ -543,21 +721,21 @@ func build_report() -> String:
 			var from: float = float(notes[0]["start"]) + w[0] * SECTION_LEN
 			hard.append("%s-%s (%.0f%%)" % [_mmss(from), _mmss(from + SECTION_LEN), w[1]])
 	if not hard.is_empty():
-		L.append("Moeilijkste stukjes: " + ", ".join(hard))
+		L.append("Hardest passages: " + ", ".join(hard))
 		summary["hardest"] = hard[0]
-		tips.append("Oefen apart: %s. Spoel terug met de knop -5 s." % hard[0])
+		tips.append("Practise this part on its own: %s. Use Loop to repeat it." % hard[0])
 
 	if acc >= 95.0 and wrong <= 0.05 * total:
 		if _used_wait:
-			tips.append("Uitstekend! Zet de wachtmodus uit en speel mee in tempo.")
+			tips.append("Excellent! Turn off wait mode and play along in time.")
 		elif speed < 1.0:
-			tips.append("Uitstekend! Verhoog het tempo een stap.")
+			tips.append("Excellent! Raise the tempo a step.")
 		else:
-			tips.append("Uitstekend gespeeld op vol tempo!")
+			tips.append("Excellent playing at full tempo!")
 	L.append("")
 	L.append("TIPS")
 	if tips.is_empty():
-		tips.append("Goed bezig. Speel het nog eens en kijk of je reeks langer wordt.")
+		tips.append("Nice work. Play it again and see if your streak gets longer.")
 	for tip in tips:
 		L.append("- " + tip)
 	summary["tips"] = Array(tips)

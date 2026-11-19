@@ -33,6 +33,7 @@ var _tempo_label: Button
 var _keys_btn: Button
 var _pass_btn: Button
 var _hz_btn: Button
+var _click_btn: Button
 var _hud := {}
 var _res := {}
 var _cal := {}
@@ -235,13 +236,13 @@ func _build_menu() -> void:
 	var brand := HBoxContainer.new()
 	brand.add_theme_constant_override("separation", 16)
 	brand.add_child(_label("KeySight", "Logo"))
-	var tag := _label("leer spelen op je eigen piano", "Muted")
+	var tag := _label("learn to play on your own piano", "Muted")
 	tag.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
 	tag.size_flags_vertical = Control.SIZE_SHRINK_END
 	brand.add_child(tag)
 	left.add_child(brand)
 	left.add_child(_spacer(4))
-	left.add_child(_label("LIEDJES", "Caption"))
+	left.add_child(_label("SONGS", "Caption"))
 	_song_scroll = ScrollContainer.new()
 	_song_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_song_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -262,8 +263,8 @@ func _build_menu() -> void:
 	_song_info = _label("", "Muted")
 	right.add_child(_song_info)
 	right.add_child(_spacer(6))
-	right.add_child(_row("MODUS", _segmented("mode", [[true, "Wachten"], [false, "Meespelen"]])))
-	right.add_child(_row("HANDEN", _segmented("hand", [[-1, "Beide"], [0, "Links"], [1, "Rechts"]], {0: LEFT.lightened(0.25), 1: RIGHT.lightened(0.1)})))
+	right.add_child(_row("MODE", _segmented("mode", [[true, "Wait"], [false, "Play along"]])))
+	right.add_child(_row("HANDS", _segmented("hand", [[-1, "Both"], [0, "Left"], [1, "Right"]], {0: LEFT.lightened(0.25), 1: RIGHT.lightened(0.1)})))
 	var tempo := HBoxContainer.new()
 	tempo.add_theme_constant_override("separation", 8)
 	var minus := _button("-", "slower")
@@ -275,8 +276,14 @@ func _build_menu() -> void:
 	tempo.add_child(minus)
 	tempo.add_child(_tempo_label)
 	tempo.add_child(plus)
+	var gap := _spacer(0)
+	gap.custom_minimum_size = Vector2(24, 0)
+	tempo.add_child(gap)
+	_click_btn = _button("Click: Off", "click")
+	_click_btn.custom_minimum_size = Vector2(280, 64)
+	tempo.add_child(_click_btn)
 	right.add_child(_row("TEMPO", tempo))
-	right.add_child(_row("BEELD", _segmented("view", [[0, "Vallend"], [1, "Partituur"], [2, "Beide"]])))
+	right.add_child(_row("VIEW", _segmented("view", [[0, "Falling notes"], [1, "Score"], [2, "Both"]])))
 	var grow := _spacer(0)
 	grow.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	right.add_child(grow)
@@ -285,7 +292,7 @@ func _build_menu() -> void:
 	right.add_child(start)
 	var tools := HBoxContainer.new()
 	tools.add_theme_constant_override("separation", 8)
-	for spec in [["Kalibreren", "calib"], ["Bijstellen", "tune"], ["Passthrough", "pass"], ["Toetsen", "keys"], ["Hz", "hz"], ["Diagnose", "diag"]]:
+	for spec in [["Calibrate", "calib"], ["Adjust", "tune"], ["Passthrough", "pass"], ["Keys", "keys"], ["Hz", "hz"], ["Diagnostics", "diag"]]:
 		var b := _button(spec[0], spec[1])
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		b.custom_minimum_size = Vector2(0, 58)
@@ -364,7 +371,8 @@ func set_options(o: Dictionary) -> void:
 	if _seg["hand"].has(o["hand"]):
 		_seg["hand"][o["hand"]].button_pressed = true
 	_tempo_label.text = "%d%%" % roundi(o["speed"] * 100)
-	_keys_btn.text = "Toetsen: %s" % o["keys"]
+	_click_btn.text = o.get("click_text", "Click: Off")
+	_keys_btn.text = "Keys: %s" % o["keys"]
 	_hz_btn.text = o.get("hz_text", "Hz")
 	_hz_btn.disabled = o.get("hz_disabled", true)
 	_hz_btn.tooltip_text = o.get("hz_note", "")
@@ -385,7 +393,7 @@ func _build_hud() -> void:
 	h.add_theme_constant_override("separation", 26)
 	p.add_child(h)
 	var left := VBoxContainer.new()
-	left.custom_minimum_size = Vector2(480, 0)
+	left.custom_minimum_size = Vector2(420, 0)
 	left.add_theme_constant_override("separation", 0)
 	_hud["title"] = _label("-", "", 32)
 	_hud["title"].add_theme_font_override("font", font_bold)
@@ -406,8 +414,20 @@ func _build_hud() -> void:
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud["bar"] = bar
 	mid.add_child(bar)
+	var fb_row := HBoxContainer.new()
+	fb_row.add_theme_constant_override("separation", 12)
 	_hud["feedback"] = _label("", "", 28)
-	mid.add_child(_hud["feedback"])
+	_hud["feedback"].size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_hud["feedback"].clip_text = true
+	_hud["feedback"].text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	fb_row.add_child(_hud["feedback"])
+	var dots := BeatDots.new()
+	dots.custom_minimum_size = Vector2(150, 30)
+	dots.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	dots.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	fb_row.add_child(dots)
+	_hud["dots"] = dots
+	mid.add_child(fb_row)
 	h.add_child(mid)
 	var acc := VBoxContainer.new()
 	acc.custom_minimum_size = Vector2(150, 0)
@@ -416,13 +436,13 @@ func _build_hud() -> void:
 	_hud["acc"] = _label("-", "Big")
 	_hud["acc"].horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	acc.add_child(_hud["acc"])
-	var cap := _label("RAAK", "Caption", 22)
+	var cap := _label("HIT", "Caption", 22)
 	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	acc.add_child(cap)
 	h.add_child(acc)
-	for spec in [["Pauze", "pause"], ["Opnieuw", "restart"], ["Menu", "menu"]]:
+	for spec in [["Loop", "loop"], ["Pause", "pause"], ["Restart", "restart"], ["Menu", "menu"]]:
 		var b := _button(spec[0], spec[1])
-		b.custom_minimum_size = Vector2(160, 0)
+		b.custom_minimum_size = Vector2(150, 0)
 		h.add_child(b)
 		_hud[spec[1]] = b
 
@@ -434,7 +454,36 @@ func update_hud(d: Dictionary) -> void:
 	_hud["acc"].text = d["acc"]
 	_hud["feedback"].text = d["feedback"]
 	_hud["feedback"].add_theme_color_override("font_color", d.get("feedback_color", MUTED))
-	_hud["pause"].text = "Pauze" if d["playing"] else "Verder"
+	_hud["pause"].text = "Pause" if d["playing"] else "Resume"
+	_hud["loop"].text = d.get("loop_text", "Loop")
+	_hud["loop"].add_theme_color_override("font_color", AMBER if d.get("loop_active", false) else TEXT)
+	var dots: BeatDots = _hud["dots"]
+	dots.visible = d.get("beats", 0) > 0
+	if dots.visible and (dots.count != d["beats"] or dots.current != d["beat"]):
+		dots.count = d["beats"]
+		dots.current = d["beat"]
+		dots.queue_redraw()
+
+
+## Beat indicator: one dot per beat in the bar, the current one lit
+## (beat 1 bigger).
+class BeatDots:
+	extends Control
+	var count := 4
+	var current := -1
+
+	func _draw() -> void:
+		if count <= 0:
+			return
+		var step := minf(size.x / count, 36.0)
+		var y := size.y / 2.0
+		for i in count:
+			var r := 9.0 if i == 0 else 7.0
+			var x := step * (i + 0.5)
+			if i == current:
+				draw_circle(Vector2(x, y), r, AMBER if i == 0 else ACCENT, true, -1.0, true)
+			else:
+				draw_circle(Vector2(x, y), r, Color(1, 1, 1, 0.22), true, -1.0, true)
 
 
 # ---------------------------------------------------------------- resultaten
@@ -455,7 +504,7 @@ class AccRing:
 		var fs := 76
 		var w := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		draw_string(font, c + Vector2(-w / 2.0, 22), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color.WHITE)
-		var sub := "raak"
+		var sub := "hit"
 		var w2 := font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, 28).x
 		draw_string(font, c + Vector2(-w2 / 2.0, 62), sub, HORIZONTAL_ALIGNMENT_LEFT, -1, 28, Color(1, 1, 1, 0.6))
 
@@ -477,13 +526,13 @@ func _build_results() -> void:
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	v.add_theme_constant_override("separation", 14)
 	h.add_child(v)
-	_res["head"] = _label("Klaar!", "Logo")
+	_res["head"] = _label("Done!", "Logo")
 	v.add_child(_res["head"])
 	_res["song"] = _label("", "Muted")
 	v.add_child(_res["song"])
 	var tiles := HBoxContainer.new()
 	tiles.add_theme_constant_override("separation", 12)
-	for spec in [["hits", "RAAK"], ["wrong", "FOUT"], ["missed", "GEMIST"], ["streak", "REEKS"]]:
+	for spec in [["hits", "HIT"], ["wrong", "WRONG"], ["missed", "MISSED"], ["streak", "STREAK"]]:
 		var tile := PanelContainer.new()
 		tile.theme_type_variation = "Tile"
 		tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -512,11 +561,11 @@ func _build_results() -> void:
 	v.add_child(tip)
 	var btns := HBoxContainer.new()
 	btns.add_theme_constant_override("separation", 12)
-	var again := _button("Opnieuw", "restart", null, "Primary")
+	var again := _button("Restart", "restart", null, "Primary")
 	again.add_theme_font_size_override("font_size", 36)
 	again.custom_minimum_size = Vector2(300, 76)
 	btns.add_child(again)
-	for spec in [["Volgend lied", "next"], ["Menu", "menu"]]:
+	for spec in [["Next song", "next"], ["Menu", "menu"]]:
 		var b := _button(spec[0], spec[1])
 		b.custom_minimum_size = Vector2(240, 76)
 		btns.add_child(b)
@@ -529,21 +578,21 @@ func show_results(s: Dictionary) -> void:
 	ring.value = acc
 	ring.color = ACCENT if acc >= 90.0 else (AMBER if acc >= 70.0 else BAD)
 	ring.queue_redraw()
-	_res["head"].text = "Prachtig!" if acc >= 95.0 else ("Goed gedaan!" if acc >= 80.0 else "Klaar, nog even oefenen")
-	var mode := "wachtmodus" if s.get("wait", false) else "meespelen"
+	_res["head"].text = "Brilliant!" if acc >= 95.0 else ("Well done!" if acc >= 80.0 else "Done, keep practising")
+	var mode := "wait mode" if s.get("wait", false) else "play along"
 	var hand: int = s.get("hand", -1)
 	_res["song"].text = "%s  ·  %s  ·  tempo %d%%  ·  %s" % [s.get("title", ""), mode, roundi(s.get("speed", 1.0) * 100),
-		{-1: "beide handen", 0: "linkerhand", 1: "rechterhand"}[hand]]
+		{-1: "both hands", 0: "left hand", 1: "right hand"}[hand]]
 	_res["hits"].text = "%d/%d" % [s.get("hits", 0), s.get("total", 0)]
 	_res["wrong"].text = str(s.get("wrong", 0))
 	_res["missed"].text = str(s.get("missed", 0))
 	_res["streak"].text = str(s.get("streak", 0))
 	var timing: String = s.get("timing", "")
-	_res["timing"].text = "Timing: " + timing if timing != "" else "Timing: in wachtmodus niet gemeten"
+	_res["timing"].text = "Timing: " + timing if timing != "" else "Timing: not measured in wait mode"
 	var hardest: String = s.get("hardest", "")
-	_res["hardest"].text = "Lastigste stuk: " + hardest if hardest != "" else "Geen lastige stukken: overal 85% of beter"
+	_res["hardest"].text = "Hardest passage: " + hardest if hardest != "" else "No hard passages: 85% or better throughout"
 	var tips: Array = s.get("tips", [])
-	_res["tip"].text = tips[0] if not tips.is_empty() else "Speel het nog eens en kijk of je reeks langer wordt."
+	_res["tip"].text = tips[0] if not tips.is_empty() else "Play it again and see if your streak gets longer."
 
 
 # ---------------------------------------------------------------- kalibratie
@@ -554,7 +603,7 @@ func _build_calib() -> void:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 18)
 	p.add_child(v)
-	_cal["title"] = _label("Kalibreren", "Logo")
+	_cal["title"] = _label("Calibrate", "Logo")
 	v.add_child(_cal["title"])
 	_cal["steps"] = _label("", "", 32)
 	_cal["steps"].autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -567,7 +616,7 @@ func _build_calib() -> void:
 	v.add_child(_cal["status"])
 	var srow := HBoxContainer.new()
 	srow.add_theme_constant_override("separation", 10)
-	for spec in [["Scherm hoger", "screen_up"], ["Scherm lager", "screen_down"], ["Meer kantelen", "tilt_more"], ["Minder kantelen", "tilt_less"]]:
+	for spec in [["Screen up", "screen_up"], ["Screen down", "screen_down"], ["Tilt more", "tilt_more"], ["Tilt less", "tilt_less"]]:
 		var sb := _button(spec[0], spec[1])
 		sb.custom_minimum_size = Vector2(250, 64)
 		srow.add_child(sb)
@@ -575,11 +624,11 @@ func _build_calib() -> void:
 	v.add_child(srow)
 	var btns := HBoxContainer.new()
 	btns.add_theme_constant_override("separation", 12)
-	_cal["done"] = _button("Klaar", "calib_done", null, "Primary")
+	_cal["done"] = _button("Done", "calib_done", null, "Primary")
 	_cal["done"].custom_minimum_size = Vector2(320, 84)
 	_cal["done"].add_theme_font_size_override("font_size", 38)
 	btns.add_child(_cal["done"])
-	_cal["cancel"] = _button("Annuleren", "calib_cancel")
+	_cal["cancel"] = _button("Cancel", "calib_cancel")
 	_cal["cancel"].custom_minimum_size = Vector2(260, 84)
 	btns.add_child(_cal["cancel"])
 	v.add_child(btns)
@@ -593,9 +642,9 @@ func set_calib(title: String, steps: String, status: String, n: int, ok: bool, s
 	_cal["status"].add_theme_color_override("font_color", ACCENT if ok else TEXT)
 	var dots := ""
 	if n >= 0:
-		dots = "%d %s gemeten" % [n, "punt" if n == 1 else "punten"]
+		dots = "%d %s measured" % [n, "point" if n == 1 else "points"]
 		if ok:
-			dots += "  -  klopt"
+			dots += "  -  good"
 	_cal["dots"].text = dots
 	_cal["dots"].add_theme_color_override("font_color", ACCENT if ok else AMBER)
 	_cal["cancel"].visible = show_cancel
@@ -610,13 +659,13 @@ func _build_diag() -> void:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 12)
 	p.add_child(v)
-	v.add_child(_label("Diagnose", "H2"))
+	v.add_child(_label("Diagnostics", "H2"))
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	v.add_child(scroll)
 	_diag_label = _label("", "", 24)
 	scroll.add_child(_diag_label)
-	var back := _button("Terug", "back")
+	var back := _button("Back", "back")
 	back.custom_minimum_size = Vector2(240, 70)
 	back.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	v.add_child(back)
